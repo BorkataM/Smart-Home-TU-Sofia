@@ -1,1 +1,7 @@
-some requirements
+fastapi
+uvicorn
+websockets
+opencv-python
+mediapipe==0.10.14
+SpeechRecognition
+pyaudio
