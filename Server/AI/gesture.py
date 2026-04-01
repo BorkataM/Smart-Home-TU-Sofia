@@ -1,21 +1,43 @@
 import cv2
-import mediapipe as mp
+
+try:
+    import mediapipe as mp
+    try:
+        from mediapipe.solutions import hands as mp_hands
+    except Exception:
+        try:
+            from mediapipe.python.solutions import hands as mp_hands
+        except Exception:
+            mp_hands = None
+except Exception:
+    mp = None
+    mp_hands = None
 
 class GestureRecognizer:
     def __init__(self):
-        self.mp_hands = mp.solutions.hands
-        # Initialize the MediaPipe Hands model
-        self.hands = self.mp_hands.Hands(
-            min_detection_confidence=0.7, 
-            min_tracking_confidence=0.5,
-            max_num_hands=1
-        )
+        self.mp_hands = mp_hands
+        self.hands = None
+
+        if self.mp_hands is not None:
+            try:
+                self.hands = self.mp_hands.Hands(
+                    min_detection_confidence=0.7,
+                    min_tracking_confidence=0.5,
+                    max_num_hands=1
+                )
+            except Exception as e:
+                print(f"MediaPipe hand model unavailable: {e}")
+                self.hands = None
+
 
     def process_frame(self, frame):
         """
         Takes an OpenCV frame (BGR), processes it, and returns a recognized gesture string.
         Returns None if no gesture is recognized.
         """
+        if self.hands is None:
+            return None
+
         # Convert the image from BGR to RGB as required by MediaPipe
         img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = self.hands.process(img_rgb)

@@ -1,6 +1,7 @@
 import asyncio
 import cv2
 import base64
+import json
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from Server.State.state import room_state
@@ -12,33 +13,73 @@ app = FastAPI()
 gesture_ai = GestureRecognizer()
 voice_ai = VoiceRecognizer()
 
+def apply_command_text(text: str, room: str = "living_room"):
+    t = text.lower()
+    command_executed = False
+
+    def apply(key, value):
+        nonlocal command_executed
+        room_state.set_device(room, key, value)
+        command_executed = True
+
+    if "light on" in t or "lights on" in t:
+        apply("light_on", True)
+    elif "light off" in t or "lights off" in t:
+        apply("light_on", False)
+    elif "open door" in t:
+        apply("door_open", True)
+        apply("door_locked", False)
+    elif "close door" in t:
+        apply("door_open", False)
+    elif "lock door" in t:
+        apply("door_locked", True)
+    elif "unlock door" in t:
+        apply("door_locked", False)
+    elif "oven on" in t or "start oven" in t:
+        apply("oven_on", True)
+    elif "oven off" in t or "stop oven" in t:
+        apply("oven_on", False)
+    elif "iron on" in t or "start iron" in t:
+        apply("iron_on", True)
+    elif "iron off" in t or "stop iron" in t:
+        apply("iron_on", False)
+    elif "open window" in t:
+        apply("window_open", True)
+    elif "close window" in t:
+        apply("window_open", False)
+    elif "computer on" in t or "start computer" in t:
+        apply("computer_on", True)
+    elif "computer off" in t or "stop computer" in t:
+        apply("computer_on", False)
+    elif "tv on" in t or "start tv" in t:
+        apply("tv_on", True)
+    elif "tv off" in t or "stop tv" in t:
+        apply("tv_on", False)
+    elif "music on" in t or "play music" in t:
+        apply("music_on", True)
+    elif "music off" in t or "stop music" in t:
+        apply("music_on", False)
+    elif "ac on" in t or "start ac" in t or "air conditioning on" in t:
+        apply("ac_on", True)
+    elif "ac off" in t or "stop ac" in t or "air conditioning off" in t:
+        apply("ac_on", False)
+    elif "ac temp" in t:
+        import re
+        m = re.search(r"(\d{2})", t)
+        if m:
+            apply("ac_temp", int(m.group(1)))
+
+    return command_executed
+
 async def background_voice_task(websocket: WebSocket):
     """Runs voice recognition in a background loop."""
     loop = asyncio.get_event_loop()
     while True:
-        # Run the blocking voice recognition in a separate thread so it doesn't freeze the video
         text = await loop.run_in_executor(None, voice_ai.listen_and_recognize)
-        
+
         if text:
             print(f"Voice Command Detected: {text}")
-            command_executed = False
-            
-            # Map voice commands to state changes
-            if "light on" in text or "lights on" in text:
-                room_state.update_light(True)
-                command_executed = True
-            elif "light off" in text or "lights off" in text:
-                room_state.update_light(False)
-                command_executed = True
-            elif "fan speed 1" in text:
-                room_state.set_fan_speed(1)
-                command_executed = True
-            elif "fan off" in text:
-                room_state.set_fan_speed(0)
-                command_executed = True
-
-            # If a command was valid, broadcast the new state to the frontend
-            if command_executed:
+            if apply_command_text(text, room="living_room"):
                 await websocket.send_json({"type": "state_update", "data": room_state.get_state()})
 
         await asyncio.sleep(0.1)
@@ -56,37 +97,81 @@ async def websocket_endpoint(websocket: WebSocket):
 
     try:
         while True:
-            # Receive base64 encoded image frames from the frontend
             data = await websocket.receive_text()
-            
-            # Decode the base64 string into an OpenCV image
+
+            # If frontend sends JSON-style commands, apply them
+            if data.strip().startswith("{"):
+                try:
+                    payload = json.loads(data)
+                    if payload.get("type") == "control":
+                        room = payload.get("room", "living_room")
+                        key = payload.get("device")
+                        val = payload.get("value")
+                        if key == "__voice__" and isinstance(val, str):
+                            if apply_command_text(val, room=room):
+                                await websocket.send_json({"type": "state_update", "data": room_state.get_state()})
+                            continue
+                        if key is not None:
+                            room_state.set_device(room, key, val)
+                            await websocket.send_json({"type": "state_update", "data": room_state.get_state()})
+                            continue
+                    elif payload.get("type") == "toggle":
+                        room = payload.get("room", "living_room")
+                        key = payload.get("device")
+                        if key is not None:
+                            room_state.toggle_device(room, key)
+                            await websocket.send_json({"type": "state_update", "data": room_state.get_state()})
+                            continue
+                    elif payload.get("type") == "gesture_test":
+                        gesture = payload.get("data")
+                        if gesture:
+                            print(f"Gesture simulated: {gesture}")
+                            command_executed = False
+                            if gesture == "OPEN_PALM":
+                                room_state.set_device("living_room", "light_on", True)
+                                command_executed = True
+                            elif gesture == "CLOSED_FIST":
+                                room_state.set_device("living_room", "light_on", False)
+                                command_executed = True
+                            elif gesture == "POINTING_UP":
+                                room_state.set_device("living_room", "oven_on", True)
+                                command_executed = True
+                            elif gesture == "PEACE_SIGN":
+                                room_state.set_device("living_room", "oven_on", False)
+                                command_executed = True
+                            if command_executed:
+                                await websocket.send_json({"type": "gesture_detected", "data": gesture})
+                                await websocket.send_json({"type": "state_update", "data": room_state.get_state()})
+                            continue
+                except Exception as e:
+                    print(f"Invalid command payload: {e}")
+                    continue
+
+            # Otherwise, treat received text as base64 encoded camera frame (gesture input)
             img_data = base64.b64decode(data.split(",")[1] if "," in data else data)
             nparr = np.frombuffer(img_data, np.uint8)
             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-            # Check for gestures
             gesture = gesture_ai.process_frame(frame)
-            
             if gesture:
                 command_executed = False
-                
-                # Map gestures to state changes
-                if gesture == "OPEN_PALM" and not room_state.get_state()["light_on"]:
-                    room_state.update_light(True)
+
+                if gesture == "OPEN_PALM":
+                    room_state.set_device("living_room", "light_on", True)
                     command_executed = True
-                elif gesture == "CLOSED_FIST" and room_state.get_state()["light_on"]:
-                    room_state.update_light(False)
+                elif gesture == "CLOSED_FIST":
+                    room_state.set_device("living_room", "light_on", False)
                     command_executed = True
-                elif gesture == "POINTING_UP" and room_state.get_state()["fan_speed"] != 1:
-                    room_state.set_fan_speed(1)
+                elif gesture == "POINTING_UP":
+                    room_state.set_device("living_room", "oven_on", True)
                     command_executed = True
-                elif gesture == "PEACE_SIGN" and room_state.get_state()["fan_speed"] != 2:
-                    room_state.set_fan_speed(2)
+                elif gesture == "PEACE_SIGN":
+                    room_state.set_device("living_room", "oven_on", False)
                     command_executed = True
 
-                # Broadcast new state if a gesture changed something
                 if command_executed:
                     print(f"Gesture Detected: {gesture}")
+                    await websocket.send_json({"type": "gesture_detected", "data": gesture})
                     await websocket.send_json({"type": "state_update", "data": room_state.get_state()})
 
     except WebSocketDisconnect:

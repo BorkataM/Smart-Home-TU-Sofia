@@ -2,6 +2,6 @@ fastapi
 uvicorn
 websockets
 opencv-python
-mediapipe==0.10.14
+mediapipe==0.10.32
 SpeechRecognition
 pyaudio

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Smart Home Simulator</title>
+    <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+    <main>
+        <h1>Smart Home Simulator</h1>
+
+        <section class="config">
+            <label for="room-select">Room:</label>
+            <select id="room-select">
+                <option value="living_room">Living Room</option>
+                <option value="kitchen">Kitchen</option>
+                <option value="bedroom">Bedroom</option>
+            </select>
+            <button id="refresh-state">Refresh State</button>
+        </section>
+
+        <section class="video-container">
+            <div>
+                <video id="camera" autoplay playsinline muted></video>
+                <canvas id="capture-canvas" width="320" height="240" hidden></canvas>
+            </div>
+            <div class="connection-status">
+                <p>WS: <span id="ws-status">Connecting...</span></p>
+                <p>Camera: <span id="camera-status">Initializing...</span></p>
+                <p>Gesture: <span id="gesture-status">None</span></p>
+                <p>Voice stream active.</p>
+            </div>
+        </section>
+
+        <section class="room-visual" id="room-visual">
+            <h2>Room Animation</h2>
+            <div id="room-cards" class="room-cards"></div>
+        </section>
+
+        <section class="state-panel">
+            <h2>Room State</h2>
+            <pre id="state-json">Loading...</pre>
+        </section>
+
+        <section class="controls">
+            <h2>Controls</h2>
+
+            <div class="row">
+                <button data-device="light_on" class="toggle-btn">Toggle Lights</button>
+                <button data-device="door_open" class="toggle-btn">Open/Close Door</button>
+                <button data-device="door_locked" class="toggle-btn">Lock/Unlock Door</button>
+                <button data-device="oven_on" class="toggle-btn">Start/Stop Oven</button>
+            </div>
+
+            <div class="row">
+                <button data-device="iron_on" class="toggle-btn">Start/Stop Iron</button>
+                <button data-device="window_open" class="toggle-btn">Open/Close Window</button>
+                <button data-device="computer_on" class="toggle-btn">Start/Stop Computer</button>
+                <button data-device="tv_on" class="toggle-btn">Start/Stop TV</button>
+            </div>
+
+            <div class="row">
+                <button data-device="music_on" class="toggle-btn">Start/Stop Music</button>
+                <button data-device="ac_on" class="toggle-btn">Start/Stop AC</button>
+                <label for="ac-temp">AC Temp</label>
+                <input id="ac-temp" type="number" min="16" max="30" value="22" />
+                <button id="set-ac-temp">Set Temp</button>
+            </div>
+
+            <div class="row">
+                <input id="voice-text" type="text" placeholder="Voice command (e.g. light on)" />
+                <button id="send-voice">Send Voice Cmd</button>
+                <button id="start-voice-listen" class="toggle-btn">Start Voice Listen</button>
+            </div>
+
+            <div class="row">
+                <button class="toggle-btn" id="simulate-open-palm">Simulate OPEN_PALM</button>
+                <button class="toggle-btn" id="simulate-closed-fist">Simulate CLOSED_FIST</button>
+                <button class="toggle-btn" id="simulate-pointing-up">Simulate POINTING_UP</button>
+                <button class="toggle-btn" id="simulate-peace-sign">Simulate PEACE_SIGN</button>
+            </div>
+        </section>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>
