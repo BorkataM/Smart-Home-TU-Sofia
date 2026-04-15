@@ -21,8 +21,8 @@ class GestureRecognizer:
         if self.mp_hands is not None:
             try:
                 self.hands = self.mp_hands.Hands(
-                    min_detection_confidence=0.7,
-                    min_tracking_confidence=0.5,
+                    min_detection_confidence=0.5,
+                    min_tracking_confidence=0.3,
                     max_num_hands=1
                 )
             except Exception as e:
@@ -47,6 +47,7 @@ class GestureRecognizer:
 
         # Get the first detected hand
         hand_landmarks = results.multi_hand_landmarks[0]
+        print(f"[Gesture] Hand detected with {len(hand_landmarks.landmark)} landmarks")
         
         # Check finger positions (Tip vs PIP joint)
         # A lower Y coordinate means the point is higher up on the screen
@@ -68,14 +69,21 @@ class GestureRecognizer:
         if ring_tip < ring_pip: fingers_up += 1
         if pinky_tip < pinky_pip: fingers_up += 1
 
+        print(f"[Gesture] Fingers up: {fingers_up}")
+
         # Map finger counts to gestures
         if fingers_up == 4:
+            print("[Gesture] Detected: OPEN_PALM")
             return "OPEN_PALM" 
         elif fingers_up == 0:
+            print("[Gesture] Detected: CLOSED_FIST")
             return "CLOSED_FIST"
         elif fingers_up == 1:
+            print("[Gesture] Detected: POINTING_UP")
             return "POINTING_UP"
         elif fingers_up == 2:
+            print("[Gesture] Detected: PEACE_SIGN")
             return "PEACE_SIGN" 
         
+        print(f"[Gesture] Unknown finger count: {fingers_up}")
         return None

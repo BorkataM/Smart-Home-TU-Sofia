@@ -68,18 +68,27 @@ def apply_command_text(text: str, room: str = "living_room"):
         m = re.search(r"(\d{2})", t)
         if m:
             apply("ac_temp", int(m.group(1)))
+    elif "fan off" in t or "stop fan" in t:
+        apply("fan_speed", 0)
+    elif "fan speed" in t or "fan" in t:
+        import re
+        m = re.search(r"(\d)", t)
+        if m:
+            speed = int(m.group(1))
+            if 0 <= speed <= 3:
+                apply("fan_speed", speed)
 
     return command_executed
 
-async def background_voice_task(websocket: WebSocket):
+async def background_voice_task(websocket: WebSocket, current_room):
     """Runs voice recognition in a background loop."""
     loop = asyncio.get_event_loop()
     while True:
         text = await loop.run_in_executor(None, voice_ai.listen_and_recognize)
 
         if text:
-            print(f"Voice Command Detected: {text}")
-            if apply_command_text(text, room="living_room"):
+            print(f"Voice Command Detected: {text} (Room: {current_room['value']})")
+            if apply_command_text(text, room=current_room["value"]):
                 await websocket.send_json({"type": "state_update", "data": room_state.get_state()})
 
         await asyncio.sleep(0.1)
@@ -92,18 +101,45 @@ async def websocket_endpoint(websocket: WebSocket):
     # Send the initial room state
     await websocket.send_json({"type": "state_update", "data": room_state.get_state()})
     
+    # Track the current room selected in frontend (mutable dict for reference sharing)
+    current_room = {"value": "living_room"}
+    
     # Start listening for voice commands simultaneously
-    voice_task = asyncio.create_task(background_voice_task(websocket))
+    voice_task = asyncio.create_task(background_voice_task(websocket, current_room))
 
     try:
         while True:
-            data = await websocket.receive_text()
+            # Receive both text and binary data
+            try:
+                data = await websocket.receive_text()
+            except Exception:
+                # Try receiving binary data if text fails
+                data = await websocket.receive_bytes()
+                print(f"[WebSocket] Received binary frame, size: {len(data)}")
+            
+            # Log message type
+            if isinstance(data, str):
+                if data.startswith("data:image"):
+                    print("[WebSocket] Received camera frame (data URL)")
+                elif data.startswith("{"):
+                    print(f"[WebSocket] Received JSON command")
+            elif isinstance(data, bytes):
+                print(f"[WebSocket] Received binary data, size: {len(data)}")
 
             # If frontend sends JSON-style commands, apply them
-            if data.strip().startswith("{"):
+            if isinstance(data, str) and data.strip().startswith("{"):
                 try:
                     payload = json.loads(data)
-                    if payload.get("type") == "control":
+                    # Update current room if specified in payload
+                    if "room" in payload:
+                        current_room["value"] = payload["room"]
+                        print(f"Room changed to: {current_room['value']}")
+                    
+                    if payload.get("type") == "room_change":
+                        # Just update the room and continue
+                        print(f"Room change confirmed: {current_room['value']}")
+                        continue
+                    elif payload.get("type") == "control":
                         room = payload.get("room", "living_room")
                         key = payload.get("device")
                         val = payload.get("value")
@@ -127,17 +163,18 @@ async def websocket_endpoint(websocket: WebSocket):
                         if gesture:
                             print(f"Gesture simulated: {gesture}")
                             command_executed = False
+                            room = current_room["value"]
                             if gesture == "OPEN_PALM":
-                                room_state.set_device("living_room", "light_on", True)
+                                room_state.set_device(room, "light_on", True)
                                 command_executed = True
                             elif gesture == "CLOSED_FIST":
-                                room_state.set_device("living_room", "light_on", False)
+                                room_state.set_device(room, "light_on", False)
                                 command_executed = True
                             elif gesture == "POINTING_UP":
-                                room_state.set_device("living_room", "oven_on", True)
+                                room_state.set_device(room, "oven_on", True)
                                 command_executed = True
                             elif gesture == "PEACE_SIGN":
-                                room_state.set_device("living_room", "oven_on", False)
+                                room_state.set_device(room, "oven_on", False)
                                 command_executed = True
                             if command_executed:
                                 await websocket.send_json({"type": "gesture_detected", "data": gesture})
@@ -148,25 +185,34 @@ async def websocket_endpoint(websocket: WebSocket):
                     continue
 
             # Otherwise, treat received text as base64 encoded camera frame (gesture input)
-            img_data = base64.b64decode(data.split(",")[1] if "," in data else data)
-            nparr = np.frombuffer(img_data, np.uint8)
-            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            try:
+                img_data = base64.b64decode(data.split(",")[1] if "," in data else data)
+                nparr = np.frombuffer(img_data, np.uint8)
+                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if frame is None:
+                    print("[Main] Failed to decode frame")
+                    continue
+            except Exception as e:
+                print(f"[Main] Frame decode error: {e}")
+                continue
 
             gesture = gesture_ai.process_frame(frame)
             if gesture:
+                print(f"Gesture detected: {gesture} (Room: {current_room['value']})")
                 command_executed = False
+                room = current_room["value"]
 
                 if gesture == "OPEN_PALM":
-                    room_state.set_device("living_room", "light_on", True)
+                    room_state.set_device(room, "light_on", True)
                     command_executed = True
                 elif gesture == "CLOSED_FIST":
-                    room_state.set_device("living_room", "light_on", False)
+                    room_state.set_device(room, "light_on", False)
                     command_executed = True
                 elif gesture == "POINTING_UP":
-                    room_state.set_device("living_room", "oven_on", True)
+                    room_state.set_device(room, "oven_on", True)
                     command_executed = True
                 elif gesture == "PEACE_SIGN":
-                    room_state.set_device("living_room", "oven_on", False)
+                    room_state.set_device(room, "oven_on", False)
                     command_executed = True
 
                 if command_executed:
@@ -178,3 +224,7 @@ async def websocket_endpoint(websocket: WebSocket):
         print("Frontend client disconnected")
     finally:
         voice_task.cancel() # Stop the voice loop when the user disconnects
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

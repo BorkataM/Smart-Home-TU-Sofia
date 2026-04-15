@@ -5,7 +5,6 @@ const wsPath = "/ws";
 const wsStatusEl = document.getElementById("ws-status");
 const cameraStatusEl = document.getElementById("camera-status");
 const gestureStatusEl = document.getElementById("gesture-status");
-const stateJsonEl = document.getElementById("state-json");
 const roomSelect = document.getElementById("room-select");
 let socket;
 let stream;
@@ -19,7 +18,6 @@ function setCameraStatus(text) {
 }
 
 function renderState(state) {
-    stateJsonEl.textContent = JSON.stringify(state, null, 2);
     renderRoomVisualization(state);
 }
 
@@ -82,15 +80,8 @@ function sendCommand(payload) {
         console.warn("WebSocket is not open");
         return;
     }
+    console.log("Sending command:", payload);
     socket.send(JSON.stringify(payload));
-}
-
-function toggleDevice(device) {
-    sendCommand({ type: "toggle", room: roomSelect.value, device });
-}
-
-function setDevice(device, value) {
-    sendCommand({ type: "control", room: roomSelect.value, device, value });
 }
 
 function startCameraLoop() {
@@ -161,6 +152,7 @@ async function setupCamera() {
         });
 
         setCameraStatus("Camera ready");
+        console.log("[Camera] Setup complete, starting loop");
         startCameraLoop();
 
     } catch (err) {
@@ -183,7 +175,9 @@ function initWebSocket() {
 
     socket.onopen = () => {
         setStatus("Connected");
-        console.log("WebSocket opened");
+        console.log("WebSocket opened, current room:", roomSelect.value);
+        // Immediately notify server of current room
+        sendCommand({ type: "room_change", room: roomSelect.value });
     };
 
     socket.onmessage = (event) => {
@@ -216,80 +210,13 @@ document.addEventListener("DOMContentLoaded", () => {
     initWebSocket();
     setupCamera();
 
-    document.getElementById("refresh-state").addEventListener("click", () => {
-        sendCommand({ type: "control", room: roomSelect.value, device: "light_on", value: false });
-        setTimeout(() => sendCommand({ type: "control", room: roomSelect.value, device: "light_on", value: false }), 50);
+    // Notify server when room selection changes
+    roomSelect.addEventListener("change", () => {
+        console.log("Room changed to:", roomSelect.value);
+        sendCommand({ type: "room_change", room: roomSelect.value });
     });
 
-    document.querySelectorAll(".toggle-btn").forEach((btn) => {
-        btn.addEventListener("click", () => {
-            toggleDevice(btn.dataset.device);
-        });
-    });
 
-    document.getElementById("set-ac-temp").addEventListener("click", () => {
-        const t = parseInt(document.getElementById("ac-temp").value, 10);
-        setDevice("ac_temp", Math.min(30, Math.max(16, t)));
-    });
 
-    document.getElementById("send-voice").addEventListener("click", () => {
-        const text = document.getElementById("voice-text").value.trim().toLowerCase();
-        if (!text) return;
-        sendCommand({ type: "control", room: roomSelect.value, device: "__voice__", value: text });
-        document.getElementById("voice-text").value = "";
-    });
 
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    let recognition;
-
-    if (SpeechRecognition) {
-        recognition = new SpeechRecognition();
-        recognition.continuous = false;
-        recognition.interimResults = false;
-        recognition.lang = 'en-US';
-
-        recognition.onresult = (event) => {
-            const spoken = event.results[0][0].transcript.toLowerCase();
-            console.log('Spoken command:', spoken);
-            document.getElementById('voice-text').value = spoken;
-            setStatus('Voice recognized: ' + spoken);
-            sendCommand({ type: 'control', room: roomSelect.value, device: '__voice__', value: spoken });
-        };
-
-        recognition.onerror = (event) => {
-            console.error('Speech recognition error', event.error);
-            setStatus('Voice error: ' + event.error);
-        };
-
-        recognition.onend = () => {
-            document.getElementById('start-voice-listen').textContent = 'Start Voice Listen';
-        };
-
-        document.getElementById('start-voice-listen').addEventListener('click', () => {
-            try {
-                recognition.start();
-                setStatus('Listening...');
-                document.getElementById('start-voice-listen').textContent = 'Stop Voice Listen';
-            } catch (err) {
-                console.warn('Recognition start error', err);
-            }
-        });
-
-    document.getElementById('simulate-open-palm').addEventListener('click', () => {
-        sendCommand({ type: 'gesture_test', data: 'OPEN_PALM' });
-    });
-    document.getElementById('simulate-closed-fist').addEventListener('click', () => {
-        sendCommand({ type: 'gesture_test', data: 'CLOSED_FIST' });
-    });
-    document.getElementById('simulate-pointing-up').addEventListener('click', () => {
-        sendCommand({ type: 'gesture_test', data: 'POINTING_UP' });
-    });
-    document.getElementById('simulate-peace-sign').addEventListener('click', () => {
-        sendCommand({ type: 'gesture_test', data: 'PEACE_SIGN' });
-    });
-    } else {
-        document.getElementById('start-voice-listen').disabled = true;
-        document.getElementById('start-voice-listen').textContent = 'Voice not supported';
-        console.warn('SpeechRecognition API is not supported in this browser.');
-    }
 });
