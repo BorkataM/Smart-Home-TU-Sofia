@@ -152,7 +152,6 @@ async function setupCamera() {
         });
 
         setCameraStatus("Camera ready");
-        console.log("[Camera] Setup complete, starting loop");
         startCameraLoop();
 
     } catch (err) {

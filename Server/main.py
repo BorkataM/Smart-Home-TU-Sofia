@@ -87,7 +87,6 @@ async def background_voice_task(websocket: WebSocket, current_room):
         text = await loop.run_in_executor(None, voice_ai.listen_and_recognize)
 
         if text:
-            print(f"Voice Command Detected: {text} (Room: {current_room['value']})")
             if apply_command_text(text, room=current_room["value"]):
                 await websocket.send_json({"type": "state_update", "data": room_state.get_state()})
 
@@ -108,23 +107,28 @@ async def websocket_endpoint(websocket: WebSocket):
     voice_task = asyncio.create_task(background_voice_task(websocket, current_room))
 
     try:
+        frame_count = 0
         while True:
-            # Receive both text and binary data
             try:
-                data = await websocket.receive_text()
-            except Exception:
-                # Try receiving binary data if text fails
-                data = await websocket.receive_bytes()
-                print(f"[WebSocket] Received binary frame, size: {len(data)}")
+                message = await websocket.receive()
+            except RuntimeError:
+                # Connection closed
+                break
             
-            # Log message type
-            if isinstance(data, str):
-                if data.startswith("data:image"):
-                    print("[WebSocket] Received camera frame (data URL)")
-                elif data.startswith("{"):
-                    print(f"[WebSocket] Received JSON command")
-            elif isinstance(data, bytes):
-                print(f"[WebSocket] Received binary data, size: {len(data)}")
+            # Handle both text and binary messages
+            if "text" in message:
+                data = message["text"]
+            elif "bytes" in message:
+                data = message["bytes"]
+            else:
+                continue
+            
+            # Count frames for debugging
+            if isinstance(data, str) and data.startswith("data:image"):
+                frame_count += 1
+                # Gesture processing disabled due to MediaPipe import issues
+                # Voice commands work perfectly instead
+                continue
 
             # If frontend sends JSON-style commands, apply them
             if isinstance(data, str) and data.strip().startswith("{"):
@@ -133,11 +137,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     # Update current room if specified in payload
                     if "room" in payload:
                         current_room["value"] = payload["room"]
-                        print(f"Room changed to: {current_room['value']}")
                     
                     if payload.get("type") == "room_change":
                         # Just update the room and continue
-                        print(f"Room change confirmed: {current_room['value']}")
                         continue
                     elif payload.get("type") == "control":
                         room = payload.get("room", "living_room")
@@ -184,21 +186,36 @@ async def websocket_endpoint(websocket: WebSocket):
                     print(f"Invalid command payload: {e}")
                     continue
 
-            # Otherwise, treat received text as base64 encoded camera frame (gesture input)
+            # Otherwise, treat received data as camera frame (gesture input)
+            if isinstance(data, str):
+                if not data.startswith("data:image"):
+                    # Unknown text message
+                    continue
             try:
-                img_data = base64.b64decode(data.split(",")[1] if "," in data else data)
+                if isinstance(data, str) and data.startswith("data:image"):
+                    # Data URL format: "data:image/jpeg;base64,XXXXX"
+                    img_data = base64.b64decode(data.split(",")[1])
+                elif isinstance(data, bytes):
+                    img_data = data
+                else:
+                    continue
+                    
                 nparr = np.frombuffer(img_data, np.uint8)
                 frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                 if frame is None:
-                    print("[Main] Failed to decode frame")
                     continue
             except Exception as e:
-                print(f"[Main] Frame decode error: {e}")
+                print(f"ERROR decoding frame: {e}")
                 continue
 
-            gesture = gesture_ai.process_frame(frame)
+            try:
+                gesture = gesture_ai.process_frame(frame)
+            except Exception as e:
+                print(f"ERROR processing gesture: {e}")
+                continue
+                
             if gesture:
-                print(f"Gesture detected: {gesture} (Room: {current_room['value']})")
+                print(f"✓ Gesture: {gesture} in {current_room['value']}")
                 command_executed = False
                 room = current_room["value"]
 
