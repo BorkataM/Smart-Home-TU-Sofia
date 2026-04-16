@@ -3,6 +3,7 @@ import cv2
 import base64
 import json
 import numpy as np
+import time
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from Server.State.state import room_state
 from Server.AI.gesture import GestureRecognizer
@@ -103,6 +104,12 @@ async def websocket_endpoint(websocket: WebSocket):
     # Track the current room selected in frontend (mutable dict for reference sharing)
     current_room = {"value": "living_room"}
     
+    # Gesture debouncing
+    last_gesture = None
+    last_gesture_time = 0
+    gesture_hold_time = 0.3  # Hold gesture for 300ms before triggering
+    gesture_cooldown = 2.0  # Wait 2 seconds between gesture commands
+    
     # Start listening for voice commands simultaneously
     voice_task = asyncio.create_task(background_voice_task(websocket, current_room))
 
@@ -126,8 +133,59 @@ async def websocket_endpoint(websocket: WebSocket):
             # Count frames for debugging
             if isinstance(data, str) and data.startswith("data:image"):
                 frame_count += 1
-                # Gesture processing disabled due to MediaPipe import issues
-                # Voice commands work perfectly instead
+                if frame_count % 10 == 0:
+                    print(f"[Frames] Received {frame_count} frames so far")
+                
+                # Process frame for gesture recognition
+                try:
+                    # Data URL format: "data:image/jpeg;base64,XXXXX"
+                    img_data = base64.b64decode(data.split(",")[1])
+                    nparr = np.frombuffer(img_data, np.uint8)
+                    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                    if frame is not None:
+                        gesture = gesture_ai.process_frame(frame)
+                        
+                        # Debouncing: only act on gesture if held consistently
+                        current_time = time.time()
+                        
+                        if gesture:
+                            # If same gesture detected, track hold time
+                            if gesture == last_gesture:
+                                hold_duration = current_time - last_gesture_time
+                                # Trigger command only if gesture held long enough and cooldown passed
+                                if hold_duration > gesture_hold_time and (current_time - last_gesture_time) > gesture_cooldown:
+                                    print(f"[Gesture Command] {gesture} held for {hold_duration:.2f}s")
+                                    command_executed = False
+                                    room = current_room["value"]
+
+                                    if gesture == "OPEN_PALM":
+                                        room_state.set_device(room, "light_on", True)
+                                        command_executed = True
+                                    elif gesture == "CLOSED_FIST":
+                                        room_state.set_device(room, "light_on", False)
+                                        command_executed = True
+                                    elif gesture == "POINTING_UP":
+                                        room_state.set_device(room, "oven_on", True)
+                                        command_executed = True
+                                    elif gesture == "PEACE_SIGN":
+                                        room_state.set_device(room, "oven_on", False)
+                                        command_executed = True
+
+                                    if command_executed:
+                                        await websocket.send_json({"type": "gesture_detected", "data": gesture})
+                                        await websocket.send_json({"type": "state_update", "data": room_state.get_state()})
+                                        last_gesture_time = current_time  # Reset cooldown
+                            else:
+                                # New gesture detected, start tracking
+                                last_gesture = gesture
+                                last_gesture_time = current_time
+                                print(f"[New Gesture] {gesture} detected")
+                        else:
+                            # No gesture, reset
+                            last_gesture = None
+                            
+                except Exception as e:
+                    print(f"ERROR processing gesture frame: {e}")
                 continue
 
             # If frontend sends JSON-style commands, apply them

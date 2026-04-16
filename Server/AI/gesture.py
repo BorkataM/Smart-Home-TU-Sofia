@@ -1,103 +1,96 @@
 import cv2
-
-try:
-    import mediapipe as mp
-    print("✓ mediapipe imported")
-    try:
-        from mediapipe.solutions import hands as mp_hands
-        print("✓ mediapipe.solutions.hands imported")
-    except Exception as e1:
-        print(f"ERROR: mediapipe.solutions.hands failed: {e1}")
-        try:
-            from mediapipe.python.solutions import hands as mp_hands
-            print("✓ mediapipe.python.solutions.hands imported (fallback)")
-        except Exception as e2:
-            print(f"ERROR: mediapipe.python.solutions.hands failed: {e2}")
-            mp_hands = None
-except Exception as e:
-    print(f"ERROR: mediapipe import failed: {e}")
-    mp = None
-    mp_hands = None
+import numpy as np
 
 class GestureRecognizer:
     def __init__(self):
-        self.mp_hands = mp_hands
-        self.hands = None
-
-        if self.mp_hands is None:
-            print("ERROR: MediaPipe hands module not available!")
-            return
-            
-        try:
-            self.hands = self.mp_hands.Hands(
-                min_detection_confidence=0.3,
-                min_tracking_confidence=0.1,
-                max_num_hands=1
-            )
-            print("✓ MediaPipe hands initialized")
-        except Exception as e:
-            print(f"ERROR: MediaPipe hand model unavailable: {e}")
-            self.hands = None
-
+        """Hand gesture recognizer using OpenCV skin detection and contour analysis."""
+        print("[OK] Gesture recognizer initialized (OpenCV-based)")
+        
+        # Define skin color range in HSV
+        self.lower_skin = np.array([0, 20, 70], dtype=np.uint8)
+        self.upper_skin = np.array([20, 255, 255], dtype=np.uint8)
+        
+        self.lower_skin2 = np.array([170, 20, 70], dtype=np.uint8)
+        self.upper_skin2 = np.array([180, 255, 255], dtype=np.uint8)
 
     def process_frame(self, frame):
         """
-        Takes an OpenCV frame (BGR), processes it, and returns a recognized gesture string.
-        Returns None if no gesture is recognized.
+        Detects hand gestures using OpenCV skin detection and contour analysis.
+        Returns a gesture string or None if no clear gesture is detected.
         """
-        if self.hands is None:
-            return None
-        
         if frame is None:
             return None
 
         try:
-            # Convert the image from BGR to RGB as required by MediaPipe
-            img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = self.hands.process(img_rgb)
-
-            if not results.multi_hand_landmarks:
+            # Convert BGR to HSV
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            
+            # Create mask for skin color
+            mask1 = cv2.inRange(hsv, self.lower_skin, self.upper_skin)
+            mask2 = cv2.inRange(hsv, self.lower_skin2, self.upper_skin2)
+            skin_mask = cv2.bitwise_or(mask1, mask2)
+            
+            # Apply morphological operations
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_CLOSE, kernel)
+            skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_OPEN, kernel)
+            
+            # Find contours
+            contours, _ = cv2.findContours(skin_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if not contours:
                 return None
-
-            # Get the first detected hand
-            hand_landmarks = results.multi_hand_landmarks[0]
-            print(f"[Hand detected]")
             
-            # Check finger positions (Tip vs PIP joint)
-            # A lower Y coordinate means the point is higher up on the screen
-            index_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.INDEX_FINGER_TIP].y
-            index_pip = hand_landmarks.landmark[self.mp_hands.HandLandmark.INDEX_FINGER_PIP].y
+            # Get the largest contour (likely the hand)
+            hand_contour = max(contours, key=cv2.contourArea)
+            area = cv2.contourArea(hand_contour)
             
-            middle_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.MIDDLE_FINGER_TIP].y
-            middle_pip = hand_landmarks.landmark[self.mp_hands.HandLandmark.MIDDLE_FINGER_PIP].y
-
-            ring_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.RING_FINGER_TIP].y
-            ring_pip = hand_landmarks.landmark[self.mp_hands.HandLandmark.RING_FINGER_PIP].y
-
-            pinky_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.PINKY_TIP].y
-            pinky_pip = hand_landmarks.landmark[self.mp_hands.HandLandmark.PINKY_PIP].y
-
-            fingers_up = 0
-            if index_tip < index_pip: fingers_up += 1
-            if middle_tip < middle_pip: fingers_up += 1
-            if ring_tip < ring_pip: fingers_up += 1
-            if pinky_tip < pinky_pip: fingers_up += 1
-
-            print(f"[Fingers up: {fingers_up}]")
-
-            # Map finger counts to gestures
-            if fingers_up == 4:
-                return "OPEN_PALM" 
-            elif fingers_up == 0:
+            # Minimum area threshold to avoid noise
+            if area < 1000:
+                return None
+            
+            print(f"[Hand detected] Area: {int(area)}")
+            
+            # Calculate hand properties
+            perimeter = cv2.arcLength(hand_contour, True)
+            if perimeter == 0:
+                return None
+            
+            # Get convex hull
+            hull = cv2.convexHull(hand_contour)
+            hull_area = cv2.contourArea(hull)
+            
+            if hull_area == 0:
+                return None
+            
+            # Solidity: ratio of contour area to convex hull area
+            solidity = area / hull_area
+            
+            # Count hand vertices using approx contour
+            epsilon = 0.02 * perimeter
+            approx = cv2.approxPolyDP(hand_contour, epsilon, True)
+            vertices = len(approx)
+            
+            # Classify gesture based on solidity and vertices
+            if solidity > 0.85 and vertices < 8:
+                # Closed, circular = CLOSED_FIST
                 return "CLOSED_FIST"
-            elif fingers_up == 1:
-                return "POINTING_UP"
-            elif fingers_up == 2:
-                return "PEACE_SIGN" 
+            elif solidity < 0.65 and vertices > 10:
+                # Open, low solidity = OPEN_PALM
+                return "OPEN_PALM"
+            elif 0.65 <= solidity <= 0.85:
+                if vertices < 10:
+                    # Less complex, semi-closed
+                    return "POINTING_UP"
+                else:
+                    # More complex, semi-open
+                    return "PEACE_SIGN"
             
             return None
+            
         except Exception as e:
-            print(f"ERROR in gesture: {e}")
+            print(f"ERROR in gesture processing: {e}")
+            return None
             import traceback
             traceback.print_exc()
             return None
